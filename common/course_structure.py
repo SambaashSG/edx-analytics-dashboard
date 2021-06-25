@@ -88,7 +88,7 @@ class CourseStructure:
         blocks = structure['blocks']
         root = blocks[structure['root']]
         sections = CourseStructure._build_sections(blocks, root['id'],
-                                                   graded, ['chapter', 'sequential', str(child_block_type)])
+                                                   graded, ['chapter', 'sequential'] + list(child_block_type))
         return sections
 
     @staticmethod

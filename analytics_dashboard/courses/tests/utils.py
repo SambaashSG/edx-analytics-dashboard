@@ -713,7 +713,8 @@ def get_mock_video_data(course_fixture, excluded_module_ids=None):
             "created": "2015-10-03T195620"
         }
         for module_id, module_block in course_fixture.course_structure()['blocks'].items()
-        if module_block['type'] == 'video' and module_id not in excluded_module_ids
+        #if module_block['type'] == 'video' and module_id not in excluded_module_ids
+        if module_block['type'] in ['video','video_jwplayer'] and module_id not in excluded_module_ids
     ]
 
 

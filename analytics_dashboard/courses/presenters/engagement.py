@@ -161,7 +161,8 @@ class CourseEngagementVideoPresenter(CourseAPIPresenterMixin, CoursePresenter):
 
     @property
     def module_type(self):
-        return 'video'
+        #return 'video'
+        return ['video','video_jwplayer']
 
     def fetch_course_module_data(self):
         # Get the videos from the API.  Use course_module_data() for cached data.
