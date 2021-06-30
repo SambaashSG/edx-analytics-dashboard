@@ -183,7 +183,7 @@ class CourseAPIPresenterMixin(metaclass=abc.ABCMeta):
     def _course_module_data(self):
         """ Retrieves course problems (from cache or course API) and calls process_module_data to attach data. """
 
-        key = self.get_cache_key(self.module_type[0]) or self.get_cache_key(self.module_type[1])
+        key = self.get_cache_key(self.module_type)
         module_data = cache.get(key)
 
         if not module_data:
@@ -204,7 +204,7 @@ class CourseAPIPresenterMixin(metaclass=abc.ABCMeta):
                     last_updated = max(last_updated, created)
 
             if last_updated is not datetime.datetime.min:
-                _key = self.get_cache_key(f'{self.module_type[0]}_last_updated')
+                _key = self.get_cache_key(f'{self.module_type}_last_updated')
                 cache.set(_key, last_updated)
                 self._last_updated = last_updated
 
@@ -355,7 +355,7 @@ class CourseAPIPresenterMixin(metaclass=abc.ABCMeta):
     def last_updated(self):
         """ Returns when data was last updated according to the data api. """
         if not self._last_updated:
-            key = self.get_cache_key(f'{self.module_type[0]}_last_updated')
+            key = self.get_cache_key(f'{self.module_type}_last_updated')
             self._last_updated = cache.get(key)
 
         return self._last_updated
