@@ -1,4 +1,6 @@
 import unittest.mock as mock
+
+from analyticsclient.client import Client
 from ddt import data, ddt, unpack
 from django.test import TestCase, override_settings
 
@@ -71,7 +73,7 @@ class ProgramsPresenterTests(TestCase):
     @unpack
     def test_get_programs(self, program_ids, course_ids):
         ''''Test programs filtered from API response.'''
-        presenter = ProgramsPresenter()
+        presenter = ProgramsPresenter(Client('base_url'))
 
         with mock.patch('analyticsclient.programs.Programs.programs',
                         mock.Mock(return_value=self.mock_api_response)):

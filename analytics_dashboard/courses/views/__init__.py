@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from urllib.parse import urljoin
 
 import requests
 from analyticsclient.client import Client
@@ -17,12 +18,10 @@ from django.utils import dateformat
 from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 from django.utils.translation import ugettext_noop
+from django.views import View
 from django.views.generic import TemplateView
-from edx_rest_api_client.client import EdxRestApiClient
-from edx_rest_api_client.exceptions import (
-    HttpClientError,
-    SlumberBaseException,
-)
+from requests.exceptions import HTTPError
+from requests.exceptions import RequestException
 from opaque_keys.edx.keys import CourseKey
 from waffle import switch_is_active
 
@@ -36,9 +35,7 @@ from analytics_dashboard.courses import permissions
 from analytics_dashboard.courses.presenters.performance import CourseReportDownloadPresenter
 from analytics_dashboard.courses.serializers import LazyEncoder
 from analytics_dashboard.courses.utils import get_page_name, is_feature_enabled
-from analytics_dashboard.courses.waffle import (
-    DISPLAY_LEARNER_ANALYTICS,
-)
+from analytics_dashboard.courses.waffle import age_available
 from analytics_dashboard.help.views import ContextSensitiveHelpMixin
 
 logger = logging.getLogger(__name__)
@@ -63,13 +60,11 @@ class CourseAPIMixin:
         self.course_api_enabled = switch_is_active('enable_course_api')
 
         if self.course_api_enabled and request.user.is_authenticated:
-            self.access_token = settings.COURSE_API_KEY or EdxRestApiClient.get_and_cache_jwt_oauth_access_token(
+            self.course_api = CourseStructureApiClient(
                 settings.BACKEND_SERVICE_EDX_OAUTH2_PROVIDER_URL,
                 settings.BACKEND_SERVICE_EDX_OAUTH2_KEY,
                 settings.BACKEND_SERVICE_EDX_OAUTH2_SECRET,
-                timeout=(3.05, 55),
-            )[0]
-            self.course_api = CourseStructureApiClient(settings.COURSE_API_URL, self.access_token)
+            )
 
         return super().dispatch(request, *args, **kwargs)
 
@@ -91,9 +86,11 @@ class CourseAPIMixin:
         if not info:
             try:
                 logger.debug("Retrieving detail for course: %s", course_id)
-                info = self.course_api.courses(course_id).get()
+                info = self.course_api.get(
+                    urljoin(settings.COURSE_API_URL + '/', f'courses/{course_id}')
+                ).json()
                 cache.set(key, info)
-            except HttpClientError as e:
+            except HTTPError as e:
                 logger.error("Unable to retrieve course info for %s: %s", course_id, e)
                 info = {}
 
@@ -112,7 +109,13 @@ class CourseAPIMixin:
             while page:
                 try:
                     logger.debug('Retrieving page %d of course info...', page)
-                    response = self.course_api.courses.get(page=page, page_size=100)
+                    response = self.course_api.get(
+                        urljoin(settings.COURSE_API_URL + '/', 'courses/'),
+                        params={
+                            'page': page,
+                            'page_size': 100,
+                        }
+                    ).json()
                     course_details = response['results']
 
                     # Cache the information so that it doesn't need to be retrieved later.
@@ -128,7 +131,7 @@ class CourseAPIMixin:
                     else:
                         page = None
                         logger.debug('Completed retrieval of course info. Retrieved info for %d courses.', len(courses))
-                except HttpClientError as e:
+                except HTTPError as e:
                     logger.error("Unable to retrieve course data: %s", e)
                     page = None
                     break
@@ -332,18 +335,6 @@ class CourseNavBarMixin:
                 'lens': 'performance',
                 'report': 'graded',
                 'depth': ''
-            },
-            {
-                'name': 'learners',
-                'text': ugettext_noop('Learners'),
-                'view': 'courses:learners:learners',
-                'icon': 'fa-users',
-                'flag': 'display_learner_analytics',
-                'fragment': '#?ignore_segments=inactive',
-                'scope': 'course',
-                'lens': 'learners',
-                'report': 'roster',
-                'depth': ''
             }
 
         ]
@@ -424,17 +415,54 @@ class CourseNavBarMixin:
         return context
 
 
+class AnalyticsV0Mixin(View):
+    """
+    put views on analytics v0 unless v1 is requested
+    this mixin will be removed when transition is complete
+    """
+    analytics_client = None
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        api_version = request.GET.get('v', '0')
+        analytics_base_url = settings.DATA_API_URL_V1 if api_version == '1' else settings.DATA_API_URL
+        self.analytics_client = Client(base_url=analytics_base_url,
+                                       auth_token=settings.DATA_API_AUTH_TOKEN,
+                                       timeout=settings.ANALYTICS_API_DEFAULT_TIMEOUT)
+
+
+class AnalyticsV1Mixin(View):
+    """
+    put views on analytics v1 if it is available, otherwise v0
+    still preserves a v0 escape valve during transition
+    but that will be removed from this class when we're done
+    """
+    analytics_client = None
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        v_default = '0'
+        if settings.DATA_API_V1_ENABLED:
+            v_default = '1'
+
+        api_version = request.GET.get('v', v_default)
+        analytics_base_url = settings.DATA_API_URL_V1 if api_version == '1' else settings.DATA_API_URL
+        self.analytics_client = Client(base_url=analytics_base_url,
+                                       auth_token=settings.DATA_API_AUTH_TOKEN,
+                                       timeout=settings.ANALYTICS_API_DEFAULT_TIMEOUT)
+
+
 class CourseView(LoginRequiredMixin, CourseValidMixin, CoursePermissionMixin, TemplateView):
     """
     Base course view.
 
     Adds conveniences such as course_id attribute, and handles 404s when retrieving data from the API.
     """
-    client = None
     course = None
     course_id = None
     course_key = None
     user = None
+    api_version = None
 
     def dispatch(self, request, *args, **kwargs):
         self.user = request.user
@@ -454,9 +482,7 @@ class CourseView(LoginRequiredMixin, CourseValidMixin, CoursePermissionMixin, Te
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        self.client = Client(base_url=settings.DATA_API_URL,
-                             auth_token=settings.DATA_API_AUTH_TOKEN, timeout=settings.LMS_DEFAULT_TIMEOUT)
-        self.course = self.client.courses(self.course_id)
+        self.course = self.analytics_client.courses(self.course_id)
         return context
 
 
@@ -488,7 +514,7 @@ class CourseTemplateWithNavView(CourseNavBarMixin, CourseTemplateView):
     pass
 
 
-class CourseHome(CourseTemplateWithNavView):
+class CourseHome(AnalyticsV0Mixin, CourseTemplateWithNavView):
     template_name = 'courses/home.html'
     page_name = {
         'scope': 'course',
@@ -501,21 +527,19 @@ class CourseHome(CourseTemplateWithNavView):
     def get_table_items(self):
         items = []
 
-        enrollment_items = {
-            'name': _('Enrollment'),
-            'icon': 'fa-child',
-            'heading': _('Who are my learners?'),
-            'items': [
-                {
-                    'title': ugettext_noop('How many learners are in my course?'),
-                    'view': 'courses:enrollment:activity',
-                    'breadcrumbs': [_('Activity')],
-                    'fragment': '',
-                    'scope': 'course',
-                    'lens': 'enrollment',
-                    'report': 'activity',
-                    'depth': ''
-                },
+        enrollment_subitems = [
+            {
+                'title': ugettext_noop('How many learners are in my course?'),
+                'view': 'courses:enrollment:activity',
+                'breadcrumbs': [_('Activity')],
+                'fragment': '',
+                'scope': 'course',
+                'lens': 'enrollment',
+                'report': 'activity',
+                'depth': ''
+            }]
+        if age_available():
+            enrollment_subitems = enrollment_subitems + [
                 {
                     'title': ugettext_noop('How old are my learners?'),
                     'view': 'courses:enrollment:demographics_age',
@@ -525,38 +549,45 @@ class CourseHome(CourseTemplateWithNavView):
                     'lens': 'enrollment',
                     'report': 'demographics',
                     'depth': 'age'
-                },
-                {
-                    'title': ugettext_noop('What level of education do my learners have?'),
-                    'view': 'courses:enrollment:demographics_education',
-                    'breadcrumbs': [_('Demographics'), _('Education')],
-                    'fragment': '',
-                    'scope': 'course',
-                    'lens': 'enrollment',
-                    'report': 'demographics',
-                    'depth': 'education'
-                },
-                {
-                    'title': ugettext_noop('What is the learner gender breakdown?'),
-                    'view': 'courses:enrollment:demographics_gender',
-                    'breadcrumbs': [_('Demographics'), _('Gender')],
-                    'fragment': '',
-                    'scope': 'course',
-                    'lens': 'enrollment',
-                    'report': 'demographics',
-                    'depth': 'gender'
-                },
-                {
-                    'title': ugettext_noop('Where are my learners?'),
-                    'view': 'courses:enrollment:geography',
-                    'breadcrumbs': [_('Geography')],
-                    'fragment': '',
-                    'scope': 'course',
-                    'lens': 'enrollment',
-                    'report': 'geography',
-                    'depth': ''
-                },
-            ],
+                }]
+        enrollment_subitems = enrollment_subitems + [
+            {
+                'title': ugettext_noop('What level of education do my learners have?'),
+                'view': 'courses:enrollment:demographics_education',
+                'breadcrumbs': [_('Demographics'), _('Education')],
+                'fragment': '',
+                'scope': 'course',
+                'lens': 'enrollment',
+                'report': 'demographics',
+                'depth': 'education'
+            },
+            {
+                'title': ugettext_noop('What is the learner gender breakdown?'),
+                'view': 'courses:enrollment:demographics_gender',
+                'breadcrumbs': [_('Demographics'), _('Gender')],
+                'fragment': '',
+                'scope': 'course',
+                'lens': 'enrollment',
+                'report': 'demographics',
+                'depth': 'gender'
+            },
+            {
+                'title': ugettext_noop('Where are my learners?'),
+                'view': 'courses:enrollment:geography',
+                'breadcrumbs': [_('Geography')],
+                'fragment': '',
+                'scope': 'course',
+                'lens': 'enrollment',
+                'report': 'geography',
+                'depth': ''
+            },
+        ]
+
+        enrollment_items = {
+            'name': _('Enrollment'),
+            'icon': 'fa-child',
+            'heading': _('Who are my learners?'),
+            'items': enrollment_subitems,
         }
         items.append(enrollment_items)
 
@@ -626,7 +657,7 @@ class CourseHome(CourseTemplateWithNavView):
 
             if switch_is_active('enable_problem_response_download'):
                 try:
-                    info = CourseReportDownloadPresenter(self.course_id).get_report_info(
+                    info = CourseReportDownloadPresenter(self.course_id, self.analytics_client).get_report_info(
                         report_name=CourseReportDownloadPresenter.PROBLEM_RESPONSES
                     )
                 except NotFoundError:
@@ -647,44 +678,6 @@ class CourseHome(CourseTemplateWithNavView):
                 'items': subitems
             })
 
-        if DISPLAY_LEARNER_ANALYTICS.is_enabled():
-            items.append({
-                'name': _('Learners'),
-                'icon': 'fa-users',
-                'heading': _('What are individual learners doing?'),
-                'items': [
-                    {
-                        'title': ugettext_noop("Who is engaged? Who isn't?"),
-                        'view': 'courses:learners:learners',
-                        'breadcrumbs': [_('All Learners')],
-                        'fragment': '#?ignore_segments=inactive',
-                        'scope': 'course',
-                        'lens': 'learners',
-                        'report': 'roster',
-                        'depth': ''
-                    },
-                    # TODO: this is commented out until we complete the deep linking work, AN-6671
-                    # {
-                    #     'title': _('Who has been active recently?'),
-                    #     'view': 'courses:learners:learners',  # TODO: map this to the actual action in AN-6205
-                    #     # TODO: what would the breadcrumbs be?
-                    #     'breadcrumbs': [_('Learners')]
-                    # },
-                    # {
-                    #     'title': _('Who is most engaged in the discussions?'),
-                    #     'view': 'courses:learners:learners',  # TODO: map this to the actual action in AN-6205
-                    #     # TODO: what would the breadcrumbs be?
-                    #     'breadcrumbs': [_('Learners')]
-                    # },
-                    # {
-                    #     'title': _("Who hasn't watched videos recently?"),
-                    #     'view': 'courses:learners:learners',  # TODO: map this to the actual action in AN-6205
-                    #     # TODO: what would the breadcrumbs be?
-                    #     'breadcrumbs': [_('Learners')]
-                    # }
-                ]
-            })
-
         translate_dict_values(items, ('name',))
         for item in items:
             translate_dict_values(item['items'], ('title',))
@@ -699,22 +692,6 @@ class CourseHome(CourseTemplateWithNavView):
         })
 
         context['page_data'] = self.get_page_data(context)
-
-        # Some orgs do not wish to allow access to learner analytics.
-        # See https://openedx.atlassian.net/browse/DENG-536
-        course_org = CourseKey.from_string(self.course_id).org
-        if course_org in settings.BLOCK_LEARNER_ANALYTICS_ORG_LIST:
-            user = self.request.user.get_username()
-            logger.info(
-                'Removing learner analytics from the %s course home page user %s',
-                self.course_id, user
-            )
-            context['primary_nav_items'] = [
-                item for item in context['primary_nav_items'] if item['name'] != 'learners'
-            ]
-            context['table_items'] = [
-                item for item in context['table_items'] if item['name'] != _('Learners')
-            ]
 
         overview_data = []
         if self.course_api_enabled:
@@ -787,7 +764,7 @@ class CourseStructureExceptionMixin:
     def dispatch(self, request, *args, **kwargs):
         try:
             return super().dispatch(request, *args, **kwargs)
-        except SlumberBaseException as e:
+        except RequestException as e:
             # Return the appropriate response if a 404 occurred.
             response = getattr(e, 'response')
             if response is not None:

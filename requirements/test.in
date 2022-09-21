@@ -8,7 +8,6 @@ bok-choy
 coverage
 ddt
 django-dynamic-fixture
-elasticsearch==2.4.1
 httpretty
 pycodestyle
 pydocstyle
@@ -18,6 +17,3 @@ pytest-cov
 pytest-django
 selenium
 testfixtures
-
-# greater version breaking a11y tests command
-pytest==5.4.3

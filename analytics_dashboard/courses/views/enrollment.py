@@ -10,15 +10,32 @@ from analytics_dashboard.courses.presenters.enrollment import (
     CourseEnrollmentDemographicsPresenter,
     CourseEnrollmentPresenter,
 )
-from analytics_dashboard.courses.views import CourseTemplateWithNavView
+from analytics_dashboard.courses.views import CourseTemplateWithNavView, AnalyticsV0Mixin, AnalyticsV1Mixin
+from analytics_dashboard.courses.waffle import age_available
 
 logger = logging.getLogger(__name__)
 
 
-class EnrollmentTemplateView(CourseTemplateWithNavView):
-    """
-    Base view for course enrollment pages.
-    """
+# separated from EnrollmentTemplateView so it can be rerun in test
+def _enrollment_secondary_nav():
+    demographics_landing_view = {
+        'name': 'demographics',
+        'text': ugettext_noop('Demographics'),
+        'view': 'courses:enrollment:demographics_age',
+        'scope': 'course',
+        'lens': 'enrollment',
+        'report': 'demographics',
+        'depth': 'age'
+    } if age_available() else {
+        'name': 'demographics',
+        'text': ugettext_noop('Demographics'),
+        'view': 'courses:enrollment:demographics_education',
+        'scope': 'course',
+        'lens': 'enrollment',
+        'report': 'demographics',
+        'depth': 'education'
+    }
+
     secondary_nav_items = [
         {
             'name': 'activity',
@@ -29,15 +46,7 @@ class EnrollmentTemplateView(CourseTemplateWithNavView):
             'report': 'activity',
             'depth': ''
         },
-        {
-            'name': 'demographics',
-            'text': ugettext_noop('Demographics'),
-            'view': 'courses:enrollment:demographics_age',
-            'scope': 'course',
-            'lens': 'enrollment',
-            'report': 'demographics',
-            'depth': 'age'
-        },
+        demographics_landing_view,
         {
             'name': 'geography',
             'text': ugettext_noop('Geography'),
@@ -49,15 +58,20 @@ class EnrollmentTemplateView(CourseTemplateWithNavView):
         },
     ]
     translate_dict_values(secondary_nav_items, ('text',))
+    return secondary_nav_items
+
+
+class EnrollmentTemplateView(CourseTemplateWithNavView):
+    """
+    Base view for course enrollment pages.
+    """
+    secondary_nav_items = _enrollment_secondary_nav()
     active_primary_nav_item = 'enrollment'
 
 
-class EnrollmentDemographicsTemplateView(EnrollmentTemplateView):
-    """
-    Base view for course enrollment demographics pages.
-    """
-    active_secondary_nav_item = 'demographics'
-    tertiary_nav_items = [
+# separated from the class so it can be invoked in test with varying settings
+def _enrollment_tertiary_nav():
+    tertiary_age = [
         {
             'name': 'age',
             'text': ugettext_noop('Age'),
@@ -66,7 +80,9 @@ class EnrollmentDemographicsTemplateView(EnrollmentTemplateView):
             'lens': 'enrollment',
             'report': 'demographics',
             'depth': 'age'
-        },
+        }
+    ] if age_available() else []
+    tertiary_nav_items = tertiary_age + [
         {
             'name': 'education',
             'text': ugettext_noop('Education'),
@@ -87,6 +103,16 @@ class EnrollmentDemographicsTemplateView(EnrollmentTemplateView):
         }
     ]
     translate_dict_values(tertiary_nav_items, ('text',))
+    return tertiary_nav_items
+
+
+class EnrollmentDemographicsTemplateView(EnrollmentTemplateView):
+    """
+    Base view for course enrollment demographics pages.
+    """
+    active_secondary_nav_item = 'demographics'
+
+    tertiary_nav_items = _enrollment_tertiary_nav()
 
     # Translators: Do not translate UTC.
     update_message = _('Demographic learner data was last updated %(update_date)s at %(update_time)s UTC.')
@@ -104,7 +130,7 @@ class EnrollmentDemographicsTemplateView(EnrollmentTemplateView):
         return formatted_percent
 
 
-class EnrollmentActivityView(EnrollmentTemplateView):
+class EnrollmentActivityView(AnalyticsV1Mixin, EnrollmentTemplateView):
     template_name = 'courses/enrollment_activity.html'
     page_title = _('Enrollment Activity')
     page_name = {
@@ -122,7 +148,7 @@ class EnrollmentActivityView(EnrollmentTemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        presenter = CourseEnrollmentPresenter(self.course_id)
+        presenter = CourseEnrollmentPresenter(self.course_id, self.analytics_client)
 
         summary = None
         trend = None
@@ -145,7 +171,7 @@ class EnrollmentActivityView(EnrollmentTemplateView):
         return context
 
 
-class EnrollmentDemographicsAgeView(EnrollmentDemographicsTemplateView):
+class EnrollmentDemographicsAgeView(AnalyticsV0Mixin, EnrollmentDemographicsTemplateView):
     template_name = 'courses/enrollment_demographics_age.html'
     page_title = _('Enrollment Demographics by Age')
     page_name = {
@@ -158,7 +184,7 @@ class EnrollmentDemographicsAgeView(EnrollmentDemographicsTemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        presenter = CourseEnrollmentDemographicsPresenter(self.course_id)
+        presenter = CourseEnrollmentDemographicsPresenter(self.course_id, self.analytics_client)
         binned_ages = None
         summary = None
         known_enrollment_percent = None
@@ -183,7 +209,7 @@ class EnrollmentDemographicsAgeView(EnrollmentDemographicsTemplateView):
         return context
 
 
-class EnrollmentDemographicsEducationView(EnrollmentDemographicsTemplateView):
+class EnrollmentDemographicsEducationView(AnalyticsV1Mixin, EnrollmentDemographicsTemplateView):
     template_name = 'courses/enrollment_demographics_education.html'
     page_title = _('Enrollment Demographics by Education')
     page_name = {
@@ -196,7 +222,7 @@ class EnrollmentDemographicsEducationView(EnrollmentDemographicsTemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        presenter = CourseEnrollmentDemographicsPresenter(self.course_id)
+        presenter = CourseEnrollmentDemographicsPresenter(self.course_id, self.analytics_client)
         binned_education = None
         summary = None
         known_enrollment_percent = None
@@ -221,7 +247,7 @@ class EnrollmentDemographicsEducationView(EnrollmentDemographicsTemplateView):
         return context
 
 
-class EnrollmentDemographicsGenderView(EnrollmentDemographicsTemplateView):
+class EnrollmentDemographicsGenderView(AnalyticsV1Mixin, EnrollmentDemographicsTemplateView):
     template_name = 'courses/enrollment_demographics_gender.html'
     page_title = _('Enrollment Demographics by Gender')
     page_name = {
@@ -234,7 +260,7 @@ class EnrollmentDemographicsGenderView(EnrollmentDemographicsTemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        presenter = CourseEnrollmentDemographicsPresenter(self.course_id)
+        presenter = CourseEnrollmentDemographicsPresenter(self.course_id, self.analytics_client)
         gender_data = None
         trend = None
         known_enrollment_percent = None
@@ -259,7 +285,7 @@ class EnrollmentDemographicsGenderView(EnrollmentDemographicsTemplateView):
         return context
 
 
-class EnrollmentGeographyView(EnrollmentTemplateView):
+class EnrollmentGeographyView(AnalyticsV1Mixin, EnrollmentTemplateView):
     template_name = 'courses/enrollment_geography.html'
     page_title = _('Enrollment Geography')
     page_name = {
@@ -276,7 +302,7 @@ class EnrollmentGeographyView(EnrollmentTemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        presenter = CourseEnrollmentPresenter(self.course_id)
+        presenter = CourseEnrollmentPresenter(self.course_id, self.analytics_client)
 
         data = None
         last_updated = None

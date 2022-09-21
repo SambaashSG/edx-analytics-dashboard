@@ -1,10 +1,10 @@
 {
-    "extends": "eslint-config-edx",
+    "extends": "@edx/eslint-config",
     "parser": "babel-eslint",
     "parserOptions": {
         "sourceType": "module",
         "allowImportExportEverywhere": true,
-        "plugins": ["syntax-dynamic-import"]
+        "plugins": ["@babel/plugin-syntax-dynamic-import"]
     },
     "plugins": [
         "import"

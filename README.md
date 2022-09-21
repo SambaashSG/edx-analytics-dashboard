@@ -1,16 +1,15 @@
 Part of [Open edX](https://open.edx.org/)
 
-edX Analytics Dashboard [![BuildStatus](https://travis-ci.com/edx/edx-analytics-dashboard.svg?branch=master)](https://travis-ci.com/edx/edx-analytics-dashboard) [![CoverageStatus](https://img.shields.io/coveralls/edx/edx-analytics-dashboard.svg)](https://coveralls.io/r/edx/edx-analytics-dashboard?branch=master)
+edX Analytics Dashboard [![CoverageStatus](https://img.shields.io/coveralls/edx/edx-analytics-dashboard.svg)](https://coveralls.io/r/edx/edx-analytics-dashboard?branch=master)
 =======================
 Dashboard to display course analytics to course teams
 
 Prerequisites
 -------------
-* Python 3.5.x
+* Python 3.8.x
 * [gettext](http://www.gnu.org/software/gettext/)
 * [node](https://nodejs.org) 12.11.1
 * [npm](https://www.npmjs.org/) 6.11.3
-* [JDK 7+](http://openjdk.java.net/)
 
 Warning: You must have NPM version 5.5.1. Using another version might result in
 a different `package-lock.json` file. Committing those changes might break our
@@ -19,12 +18,25 @@ install`. [nodeenv](https://github.com/ekalinin/nodeenv) or
 [n](https://github.com/tj/n) are tools that you can use to work on different
 Node.js and NPM versions than your system installed versions.
 
-We have a TODO to set-up the development environment with a Docker container so
+It's recommended you set up this service with devstack so
 that you will not have to manage Node and NPM versions yourself.
 
-Getting Started
----------------
+Getting Started With Devstack
+-----------------------------
+The best way to run this service is with edX Devstack: https://github.com/openedx/devstack.
+
+See the [Devstack README](https://github.com/openedx/devstack/blob/master/README.rst) for information on how to install and run Insights. For the purposes of devstack this service will be referred to as `insights` and not `analytics-dashboard`.
+
+Provisioning for insights and the data api can be combined:
+
+.. code:: sh
+
+make dev.provision insights+analyticsapi
+
+Getting Started Standalone
+--------------------------
 1. Get the code (e.g. clone the repository).
+2. Create a Python 3 virtual environment and activate it
 2. Install the Python/Node requirements:
 
         $ make develop
@@ -94,16 +106,21 @@ functionality on request (e.g. turning on beta functionality for superusers). Cr
 
         $ ./manage.py waffle_flag name-of-my-flag --everyone --create
 
-The following flags are available:
+Settings describe features which are not expected to be toggled on and off without significant system changes.
+
+The following setting is available:
 
 | Flag                           | Purpose                                               |
 |--------------------------------|-------------------------------------------------------|
-| display_learner_analytics      | Display Learner Analytics links                       |
+| ENROLLMENT_AGE_AVAILABLE      | Display age as part of enrollment demographics                       |
+
 
 Authentication & Authorization
 ------------------------------
+This section is only necessary if running I stand alone service OAuth2 is automatically configured by provisioning in devstack.
+
 By default, this application relies on an external OAuth2 provider
-(contained within the [LMS](https://github.com/edx/edx-platform)) for authentication and authorization. If you are a
+(contained within the [LMS](https://github.com/openedx/edx-platform)) for authentication and authorization. If you are a
 developer, and do not want to setup edx-platform, you can get around this requirement by doing the following:
 
 1. Set `ENABLE_AUTO_AUTH` to `True` in your settings file. (This is the default value in `settings/local.py`).
@@ -218,14 +235,14 @@ How to Contribute
 -----------------
 
 Contributions are very welcome, but for legal reasons, you must submit a signed
-[individual contributor's agreement](http://code.edx.org/individual-contributor-agreement.pdf)
+[individual contributor's agreement](https://openedx.org/cla)
 before we can accept your contribution. See our
-[CONTRIBUTING](https://github.com/edx/edx-platform/blob/master/CONTRIBUTING.rst)
+[CONTRIBUTING](https://github.com/openedx/edx-platform/blob/master/CONTRIBUTING.rst)
 file for more information -- it also contains guidelines for how to maintain
 high code quality, which will make your contribution more likely to be accepted.
 
 ### JavaScript Code Quality
-JavaScript developers should adhere to the [edX JavaScript standards](https://github.com/edx/edx-platform/wiki/Javascript-standards-for-the-edx-platform).
+JavaScript developers should adhere to the [edX JavaScript standards](https://github.com/openedx/edx-platform/wiki/Javascript-standards-for-the-edx-platform).
 These standards are enforced using [JSHint](http://www.jshint.com/) and [jscs](https://www.npmjs.org/package/jscs).
 
 Testing

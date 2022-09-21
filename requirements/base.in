@@ -1,8 +1,6 @@
 -c constraints.txt
 
-awesome-slugify         				# GPLv3
-bpython							        # MIT License
-Django									# BSD License
+django									# BSD License
 django-appconf
 django-braces							# BSD
 django-countries    					# MIT
@@ -27,11 +25,10 @@ edx-analytics-data-api-client
 edx-i18n-tools
 edx-rest-api-client						# Apache
 edx-toggles
-libsass==0.11.1							# MIT
+libsass								# MIT
 logutils        						# BSD
 requests								# Apache 2.0
 stevedore
 path.py
-
-# This can be removed once an official social-auth-app-django Pypi release with Django 2.2 support is available in the future.
--e git+https://github.com/python-social-auth/social-app-django.git@ffa0fb99a80d11479bea2c4eae9a01ee835d52b9#egg=social-auth-app-django
+python-slugify
+social-auth-app-django

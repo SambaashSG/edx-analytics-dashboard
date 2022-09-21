@@ -1,4 +1,6 @@
 import unittest.mock as mock
+
+from analyticsclient.client import Client
 from ddt import data, ddt, unpack
 from django.conf import settings
 from django.core.cache import cache
@@ -103,6 +105,12 @@ class CourseSummariesPresenterTests(TestCase):
                     'cumulative_count': 4087,
                     'count_change_7_days': 0,
                     'passing_users': 100,
+                },
+                'masters': {
+                    'count': 1101,
+                    'cumulative_count': 1103,
+                    'count_change_7_days': 0,
+                    'passing_users': 0,
                 }
             },
             'created': utils.CREATED_DATETIME_STRING,
@@ -115,7 +123,7 @@ class CourseSummariesPresenterTests(TestCase):
             'end_date': None,
             'pacing_type': 'instructor_paced',
             'availability': None,
-            'count': None,
+            'count': 0,
             'cumulative_count': 1,
             'count_change_7_days': 0,
             'enrollment_modes': {
@@ -146,6 +154,12 @@ class CourseSummariesPresenterTests(TestCase):
                 'honor': {
                     'count': 1,
                     'cumulative_count': 1,
+                    'count_change_7_days': 0,
+                    'passing_users': 0,
+                },
+                'masters': {
+                    'count': 10,
+                    'cumulative_count': 10,
                     'count_change_7_days': 0,
                     'passing_users': 0,
                 }
@@ -207,7 +221,7 @@ class CourseSummariesPresenterTests(TestCase):
     )
     @unpack
     def test_get_summaries(self, input_course_ids, ouptut_course_ids):
-        presenter = CourseSummariesPresenter()
+        presenter = CourseSummariesPresenter(Client('base_url'))
         if input_course_ids:
             mock_api_response = [
                 self._API_SUMMARIES[course_id] for course_id in input_course_ids
@@ -227,9 +241,21 @@ class CourseSummariesPresenterTests(TestCase):
 
     def test_no_summaries(self):
         cache.clear()  # previous test has course_ids=None case cached
-        presenter = CourseSummariesPresenter()
+        presenter = CourseSummariesPresenter(Client('base_url'))
         with mock.patch('analyticsclient.course_summaries.CourseSummaries.course_summaries',
                         mock.Mock(return_value=[])):
             summaries, last_updated = presenter.get_course_summaries()
             self.assertListEqual(summaries, [])
             self.assertIsNone(last_updated)
+
+    def test_get_course_summary_metrics(self):
+        presenter = CourseSummariesPresenter(Client('base_url'))
+        metrics = presenter.get_course_summary_metrics(self._PRESENTER_SUMMARIES.values())
+        expected = {
+            'total_enrollment': 5111,
+            'current_enrollment': 3888,
+            'enrollment_change_7_days': 4,
+            'verified_enrollment': 13,
+            'masters_enrollment': 1111,
+        }
+        self.assertEqual(metrics, expected)

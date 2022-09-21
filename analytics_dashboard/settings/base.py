@@ -170,6 +170,8 @@ TEMPLATES = [
 ########## MIDDLEWARE CONFIGURATION
 # See: https://docs.djangoproject.com/en/1.11/ref/settings/#middleware-classes
 MIDDLEWARE = [
+    'edx_django_utils.monitoring.CookieMonitoringMiddleware',
+    'edx_django_utils.monitoring.DeploymentMonitoringMiddleware',
     'edx_django_utils.cache.middleware.RequestCacheMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
@@ -315,8 +317,13 @@ DOCUMENTATION_LOAD_ERROR_MESSAGE = f'<a href="{DOCUMENTATION_LOAD_ERROR_URL}" ta
 
 ########## DATA API CONFIGURATION
 DATA_API_URL = 'http://127.0.0.1:9001/api/v0'
+DATA_API_V1_ENABLED = False
+DATA_API_URL_V1 = 'http://127.0.0.1:9001/api/v1'
 DATA_API_AUTH_TOKEN = 'changeme'
 ########## END DATA API CONFIGURATION
+
+# can this installation collect and display age info
+ENROLLMENT_AGE_AVAILABLE = True
 
 # used to determine if a course ID is valid
 LMS_COURSE_VALIDATION_BASE_URL = None
@@ -413,7 +420,7 @@ MODULE_PREVIEW_URL = 'http://127.0.0.1:8000/xblock'
 # before giving up.  These values should be overridden in
 # configuration.
 ANALYTICS_API_DEFAULT_TIMEOUT = 10
-LMS_DEFAULT_TIMEOUT = 5
+LMS_DEFAULT_TIMEOUT = (3.05, 5)
 ########## END EXTERNAL SERVICE TIMEOUTS
 
 _ = lambda s: s
@@ -447,17 +454,6 @@ REST_FRAMEWORK = {
 # Regex used to capture course_ids from URLs
 COURSE_ID_PATTERN = r'(?P<course_id>[^/+]+[/+][^/+]+[/+][^/]+)'
 ########## END COURSE_ID_PATTERN
-
-########## LEARNER_API_LIST_DOWNLOAD_FIELDS
-# Comma-delimited list of field names to include in the Learner List CSV download
-# e.g., # "username,segments,cohort,engagements.videos_viewed,last_updated"
-# Default (None) includes all available fields, in alphabetical order.
-LEARNER_API_LIST_DOWNLOAD_FIELDS = None
-########## END LEARNER_API_LIST_DOWNLOAD_FIELDS
-
-########## BLOCK_LEARNER_ANALYTICS_ORG_LIST
-BLOCK_LEARNER_ANALYTICS_ORG_LIST = []
-########## END BLOCK_LEARNER_ANALYTICS_ORG_LIST
 
 ########## CACHE CONFIGURATION
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#caches
@@ -514,3 +510,8 @@ PRIVACY_POLICY_URL = 'http://example.com/privacy-policy'
 JWT_AUTH = {
     'JWT_AUTH_HEADER_PREFIX': 'JWT',
 }
+
+# Required for Django 3.2 upgrade
+# See https://openedx.atlassian.net/wiki/spaces/AC/pages/3066626061/Django+3.2+Upgrade+Key+Changes
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+DEFAULT_HASHING_ALGORITHM = 'sha1'

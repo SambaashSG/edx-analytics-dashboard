@@ -2,10 +2,11 @@ import copy
 import datetime
 
 import unittest.mock as mock
+
+from analyticsclient.client import Client
 from analyticsclient.constants import activity_types as AT
 from analyticsclient.constants import enrollment_modes
 from ddt import data, ddt, unpack
-from django.conf import settings
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -44,14 +45,7 @@ from analytics_dashboard.courses.tests.factories import (
 
 class BasePresenterTests(TestCase):
     def setUp(self):
-        self.presenter = CoursePresenter('edX/DemoX/Demo_Course')
-
-    def test_init(self):
-        presenter = CoursePresenter('edX/DemoX/Demo_Course')
-        self.assertEqual(presenter.client.timeout, settings.ANALYTICS_API_DEFAULT_TIMEOUT)
-
-        presenter = CoursePresenter('edX/DemoX/Demo_Course', timeout=15)
-        self.assertEqual(presenter.client.timeout, 15)
+        self.presenter = CoursePresenter('edX/DemoX/Demo_Course', Client('base_url'))
 
     def test_parse_api_date(self):
         self.assertEqual(self.presenter.parse_api_date('2014-01-01'), datetime.date(year=2014, month=1, day=1))
@@ -73,7 +67,7 @@ class CourseEngagementActivityPresenterTests(TestCase):
     def setUp(self):
         super().setUp()
         self.course_id = 'this/course/id'
-        self.presenter = CourseEngagementActivityPresenter(self.course_id)
+        self.presenter = CourseEngagementActivityPresenter(self.course_id, Client('base_url'))
 
     def get_expected_trends(self, include_forum_data):
         trends = [
@@ -219,7 +213,7 @@ class CourseEngagementVideoPresenterTests(TestCase):
     def setUp(self):
         super().setUp()
         self.course_id = 'this/course/id'
-        self.presenter = CourseEngagementVideoPresenter(settings.COURSE_API_KEY, self.course_id)
+        self.presenter = CourseEngagementVideoPresenter(self.course_id, Client('base_url'))
 
     def test_default_block_data(self):
         self.assertDictEqual(self.presenter.default_block_data, {
@@ -268,8 +262,8 @@ class CourseEngagementVideoPresenterTests(TestCase):
         course_structure_fixtures = self._create_graded_and_ungraded_course_structure_fixtures()
         course_fixture = course_structure_fixtures['course']
         chapter_fixture = course_structure_fixtures['chapter']
-
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=course_fixture.course_structure())):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = course_fixture.course_structure()
             with mock.patch('analyticsclient.course.Course.videos',
                             mock.Mock(return_value=utils.get_mock_video_data(course_fixture))):
                 # check that we get results for both graded and ungraded
@@ -600,7 +594,8 @@ class CourseEngagementVideoPresenterTests(TestCase):
         with mock.patch(
             'analyticsclient.course.Course.videos', mock.Mock(return_value=utils.get_mock_video_data(fixture))
         ):
-            with mock.patch('slumber.Resource.get', mock.Mock(return_value=fixture.course_structure())):
+            with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+                api_client_get_mock.return_value.json.return_value = fixture.course_structure()
                 sibling = self.presenter.sibling_block(utils.get_encoded_module_id(start_block['id']), offset)
                 if expected_sibling_block is None:
                     self.assertIsNone(sibling)
@@ -633,7 +628,8 @@ class CourseEngagementVideoPresenterTests(TestCase):
             'analyticsclient.course.Course.videos',
             mock.Mock(return_value=utils.get_mock_video_data(fixture, excluded_module_ids=[self.VIDEO_2['id']]))
         ):
-            with mock.patch('slumber.Resource.get', mock.Mock(return_value=fixture.course_structure())):
+            with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+                api_client_get_mock.return_value.json.return_value = fixture.course_structure()
                 sibling = self.presenter.sibling_block(utils.get_encoded_module_id(self.VIDEO_1['id']), 1)
                 self.assertEqual(sibling['id'], utils.get_encoded_module_id(self.VIDEO_3['id']))
 
@@ -648,7 +644,7 @@ class CourseEnrollmentPresenterTests(TestCase):
 
     def setUp(self):
         self.course_id = 'edX/DemoX/Demo_Course'
-        self.presenter = CourseEnrollmentPresenter(self.course_id)
+        self.presenter = CourseEnrollmentPresenter(self.course_id, Client('base_url'))
 
     @mock.patch('analyticsclient.course.Course.enrollment', mock.Mock(return_value=[]))
     def test_get_trend_summary_no_data(self):
@@ -756,7 +752,7 @@ class CourseEnrollmentPresenterTests(TestCase):
 class CourseEnrollmentDemographicsPresenterTests(TestCase):
     def setUp(self):
         self.course_id = 'edX/DemoX/Demo_Course'
-        self.presenter = CourseEnrollmentDemographicsPresenter(self.course_id)
+        self.presenter = CourseEnrollmentDemographicsPresenter(self.course_id, Client('base_url'))
 
     @mock.patch('analyticsclient.course.Course.enrollment')
     def test_get_gender(self, mock_gender):
@@ -814,7 +810,7 @@ class CoursePerformancePresenterTests(TestCase):
         cache.clear()
         self.course_id = PERFORMER_PRESENTER_COURSE_ID
         self.problem_id = 'i4x://edX/DemoX.1/problem/05d289c5ad3d47d48a77622c4a81ec36'
-        self.presenter = CoursePerformancePresenter(settings.COURSE_API_KEY, self.course_id)
+        self.presenter = CoursePerformancePresenter(self.course_id, Client('base_url'))
         self.factory = CoursePerformanceDataFactory()
 
     # First and last response counts were added, insights can handle both types of API responses at the moment.
@@ -905,14 +901,14 @@ class CoursePerformancePresenterTests(TestCase):
                 self.assertListEqual(answer_distribution_entry.answer_distribution_limited,
                                      expected_answer_distribution[:12])
 
-    @mock.patch('slumber.Resource.get', mock.Mock(return_value=CoursePerformanceDataFactory.grading_policy))
-    def test_grading_policy(self):
+    @mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get')
+    def test_grading_policy(self, api_client_get_mock):
         """
         Verify the presenter returns the correct grading policy.
 
         Empty (non-truthy) assignment types should be dropped.
         """
-
+        api_client_get_mock.return_value.json.return_value = CoursePerformanceDataFactory.grading_policy
         grading_policy = self.presenter.grading_policy()
         self.assertListEqual(grading_policy, self.factory.presented_grading_policy)
 
@@ -932,8 +928,8 @@ class CoursePerformancePresenterTests(TestCase):
         """ Verify the presenter returns the correct assignments and sets the last updated date. """
 
         self.assertIsNone(self.presenter.last_updated)
-
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', self.factory.problems):
                 # With no assignment type set, the method should return all assignment types.
                 assignments = self.presenter.assignments()
@@ -969,8 +965,8 @@ class CoursePerformancePresenterTests(TestCase):
         """ Verify the presenter returns a specific problem. """
         problem = self.factory.presented_assignments[0]['children'][0]
         _id = problem['id']
-
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             actual = self.presenter.block(_id)
             expected = {
                 'id': _id,
@@ -982,7 +978,8 @@ class CoursePerformancePresenterTests(TestCase):
     def test_sections(self):
         """ Verify the presenter returns a specific assignment. """
         ungraded_problems = self.factory.problems(False)
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', mock.Mock(return_value=ungraded_problems)):
                 expected = self.factory.presented_sections
                 self.assertListEqual(self.presenter.sections(), expected)
@@ -990,7 +987,8 @@ class CoursePerformancePresenterTests(TestCase):
     def test_section(self):
         """ Verify the presenter returns a specific assignment. """
         ungraded_problems = self.factory.problems(False)
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', mock.Mock(return_value=ungraded_problems)):
                 # The method should return None if the assignment does not exist.
                 self.assertIsNone(self.presenter.section(None))
@@ -1001,7 +999,8 @@ class CoursePerformancePresenterTests(TestCase):
     def test_subsections(self):
         """ Verify the presenter returns a specific assignment. """
         ungraded_problems = self.factory.problems(False)
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', mock.Mock(return_value=ungraded_problems)):
                 # The method should return None if the assignment does not exist.
                 self.assertIsNone(self.presenter.subsections(None))
@@ -1013,7 +1012,8 @@ class CoursePerformancePresenterTests(TestCase):
     def test_subsection(self):
         """ Verify the presenter returns a specific assignment. """
         ungraded_problems = self.factory.problems(False)
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', mock.Mock(return_value=ungraded_problems)):
                 # The method should return None if the assignment does not exist.
                 self.assertIsNone(self.presenter.subsection(None, None))
@@ -1026,7 +1026,8 @@ class CoursePerformancePresenterTests(TestCase):
     def test_subsection_problems(self):
         """ Verify the presenter returns a specific assignment. """
         ungraded_problems = self.factory.problems(False)
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=self.factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = self.factory.structure
             with mock.patch('analyticsclient.course.Course.problems', mock.Mock(return_value=ungraded_problems)):
                 # The method should return None if the assignment does not exist.
                 self.assertIsNone(self.presenter.subsection_children(None, None))
@@ -1044,7 +1045,7 @@ class TagsDistributionPresenterTests(TestCase):
     def setUp(self):
         cache.clear()
         self.course_id = PERFORMER_PRESENTER_COURSE_ID
-        self.presenter = TagsDistributionPresenter(settings.COURSE_API_KEY, self.course_id)
+        self.presenter = TagsDistributionPresenter(self.course_id, Client('base_url'))
 
     @data(annotated([{"total_submissions": 21, "correct_submissions": 5,
                       "tags": {"difficulty": ["Hard"]}},
@@ -1076,7 +1077,8 @@ class TagsDistributionPresenterTests(TestCase):
     def test_available_tags(self, init_tags_data):
         factory = TagsDistributionDataFactory(init_tags_data)
 
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = factory.structure
             with mock.patch('analyticsclient.course.Course.problems_and_tags',
                             mock.Mock(return_value=factory.problems_and_tags)):
                 available_tags = self.presenter.get_available_tags()
@@ -1135,7 +1137,8 @@ class TagsDistributionPresenterTests(TestCase):
     def test_tags_distribution(self, init_tags_data):
         factory = TagsDistributionDataFactory(init_tags_data)
 
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = factory.structure
             with mock.patch('analyticsclient.course.Course.problems_and_tags',
                             mock.Mock(return_value=factory.problems_and_tags)):
                 tags_distribution = self.presenter.get_tags_distribution('learning_outcome')
@@ -1190,7 +1193,8 @@ class TagsDistributionPresenterTests(TestCase):
     def test_modules_marked_with_tag(self, init_tags_data):
         factory = TagsDistributionDataFactory(init_tags_data)
 
-        with mock.patch('slumber.Resource.get', mock.Mock(return_value=factory.structure)):
+        with mock.patch('analytics_dashboard.core.utils.CourseStructureApiClient.get') as api_client_get_mock:
+            api_client_get_mock.return_value.json.return_value = factory.structure
             with mock.patch('analyticsclient.course.Course.problems_and_tags',
                             mock.Mock(return_value=factory.problems_and_tags)):
                 modules = self.presenter.get_modules_marked_with_tag('learning_outcome', slugify('Learned nothing'))
@@ -1203,7 +1207,7 @@ class CourseReportDownloadPresenterTests(TestCase):
     def setUp(self):
         cache.clear()
         self.course_id = PERFORMER_PRESENTER_COURSE_ID
-        self.presenter = CourseReportDownloadPresenter(self.course_id)
+        self.presenter = CourseReportDownloadPresenter(self.course_id, Client('base_url'))
 
     @mock.patch('analyticsclient.course.Course.reports')
     def test_report_presenter(self, mock_reports):

@@ -1,10 +1,11 @@
 import json
 import logging
-
 from unittest.mock import Mock, patch
+from urllib.parse import urljoin
+
 import httpretty
 from analyticsclient.exceptions import NotFoundError
-from ddt import data, ddt
+from ddt import data, ddt, unpack
 from django.conf import settings
 from django.contrib.humanize.templatetags.humanize import intcomma
 from django.core.cache import cache
@@ -22,6 +23,8 @@ from analytics_dashboard.courses.tests.utils import (
     get_mock_api_enrollment_data,
     mock_course_name,
 )
+from analytics_dashboard.courses.views.enrollment import EnrollmentTemplateView, _enrollment_secondary_nav, \
+    EnrollmentDemographicsTemplateView, _enrollment_tertiary_nav
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ class CourseAPIMixin:
     COURSE_BLOCKS_API_TEMPLATE = \
         settings.COURSE_API_URL + \
         'blocks/?course_id={course_id}&requested_fields=children,graded&depth=all&all_blocks=true'
-    GRADING_POLICY_API_TEMPLATE = settings.GRADING_POLICY_API_URL + '/policy/courses/{course_id}/'
+    GRADING_POLICY_API_TEMPLATE = settings.GRADING_POLICY_API_URL + '/policy/courses/{course_id}'
 
     def mock_course_api(self, url, body=None, **kwargs):
         """
@@ -61,11 +64,31 @@ class CourseAPIMixin:
         httpretty.register_uri(httpretty.GET, url, **default_kwargs)
         logger.debug('Mocking Course API URL: %s', url)
 
+    def mock_oauth_api(self, body=None, **kwargs):
+        # Avoid developer confusion when httpretty is not active and fail the test now.
+        if not httpretty.is_enabled():
+            self.fail('httpretty is not enabled. The mock will not be used!')
+
+        url = urljoin(settings.BACKEND_SERVICE_EDX_OAUTH2_PROVIDER_URL + '/', f'access_token')
+        body = body or {
+            'access_token': 'test_access_tocken',
+            'expires_in': 10,
+        }
+        default_kwargs = {
+            'body': kwargs.get('body', json.dumps(body)),
+            'content_type': 'application/json'
+        }
+        default_kwargs.update(kwargs)
+
+        httpretty.register_uri(httpretty.POST, url, **default_kwargs)
+        logger.debug('Mocking OAuth API URL: %s', url)
+
     def mock_course_detail(self, course_id, extra=None):
-        path = f'{settings.COURSE_API_URL}courses/{course_id}/'
+        path = urljoin(settings.COURSE_API_URL + '/', f'courses/{course_id}')
         body = {'id': course_id, 'name': mock_course_name(course_id)}
         if extra:
             body.update(extra)
+        self.mock_oauth_api()
         self.mock_course_api(path, body)
 
 
@@ -157,15 +180,6 @@ class ViewTestMixin(AuthTestMixin):
 
 
 class NavAssertMixin:
-    def generate_course_name(self, course_id):
-        return 'Test ' + course_id
-
-    def assertPrimaryNav(self, nav, course_id):
-        raise NotImplementedError
-
-    def assertSecondaryNavs(self, nav, course_id):
-        raise NotImplementedError
-
     def assertNavs(self, actual_navs, expected_navs, active_nav_label):
         for item in expected_navs:
             if item['text'] == active_nav_label:
@@ -188,17 +202,6 @@ class CourseViewTestMixin(CourseAPIMixin, NavAssertMixin, ViewTestMixin):
         response = self.client.get(path, follow=True)
         self.assertEqual(response.status_code, 404)
 
-    def assertViewIsValid(self, course_id):
-        raise NotImplementedError
-
-    @httpretty.activate
-    @data(CourseSamples.DEMO_COURSE_ID, CourseSamples.DEPRECATED_DEMO_COURSE_ID)
-    @override_switch('enable_course_api', active=True)
-    @override_switch('display_course_name_in_nav', active=True)
-    def test_valid_course(self, course_id):
-        self.mock_course_detail(course_id)
-        self.assertViewIsValid(course_id)
-
     def assertValidMissingDataContext(self, context):
         raise NotImplementedError
 
@@ -210,15 +213,39 @@ class CourseViewTestMixin(CourseAPIMixin, NavAssertMixin, ViewTestMixin):
 
         self.assertValidMissingDataContext(context)
 
+    def generate_course_name(self, course_id):
+        return 'Test ' + course_id
+
     def assertValidCourseName(self, course_id, context):
         course_name = self.generate_course_name(course_id)
         self.assertEqual(context['course_name'], course_name)
 
 
 # pylint: disable=abstract-method
+@ddt
 class CourseEnrollmentViewTestMixin(CourseViewTestMixin):
     active_secondary_nav_label = None
     api_method = 'analyticsclient.course.Course.enrollment'
+
+    @httpretty.activate
+    @data(
+        (CourseSamples.DEMO_COURSE_ID, True),
+        (CourseSamples.DEMO_COURSE_ID, False),
+        (CourseSamples.DEPRECATED_DEMO_COURSE_ID, True)
+    )
+    @unpack
+    @override_switch('enable_course_api', active=True)
+    @override_switch('display_course_name_in_nav', active=True)
+    def test_valid_course(self, course_id, age_available):
+        with patch('analytics_dashboard.courses.views.enrollment.age_available', return_value=age_available):
+            # we have to rebuild nav according to setting since navs are on the class
+            EnrollmentTemplateView.secondary_nav_items = _enrollment_secondary_nav()
+            EnrollmentDemographicsTemplateView.tertiary_nav_items = _enrollment_tertiary_nav()
+            self.mock_course_detail(course_id)
+            self.getAndValidateView(course_id, age_available)
+        # put the navs back to default
+        EnrollmentTemplateView.secondary_nav_items = _enrollment_secondary_nav()
+        EnrollmentDemographicsTemplateView.tertiary_nav_items = _enrollment_tertiary_nav()
 
     def assertPrimaryNav(self, nav, course_id):
         expected = {
@@ -235,7 +262,7 @@ class CourseEnrollmentViewTestMixin(CourseViewTestMixin):
         }
         self.assertDictEqual(nav, expected)
 
-    def assertSecondaryNavs(self, nav, course_id):
+    def assertSecondaryNavs(self, nav, course_id, age_available):
         reverse_kwargs = {'course_id': course_id}
         expected = [
             {
@@ -270,6 +297,18 @@ class CourseEnrollmentViewTestMixin(CourseViewTestMixin):
             }
         ]
 
+        if not age_available:
+            expected[1] = {
+                'name': 'demographics',
+                'text': 'Demographics',
+                'translated_text': _('Demographics'),
+                'href': reverse('courses:enrollment:demographics_education', kwargs=reverse_kwargs),
+                'scope': 'course',
+                'lens': 'enrollment',
+                'report': 'demographics',
+                'depth': 'education'
+            }
+
         self.assertNavs(nav, expected, self.active_secondary_nav_label)
 
     def get_mock_data(self, course_id):
@@ -288,12 +327,12 @@ class CourseEnrollmentDemographicsMixin(CourseEnrollmentViewTestMixin):
 
         return formatted_percent
 
-    def assertAllNavs(self, context, course_id):
+    def assertAllNavs(self, context, course_id, age_available):
         self.assertPrimaryNav(context['primary_nav_item'], course_id)
-        self.assertSecondaryNavs(context['secondary_nav_items'], course_id)
-        self.assertTertiaryNavs(context['tertiary_nav_items'], course_id)
+        self.assertSecondaryNavs(context['secondary_nav_items'], course_id, age_available)
+        self.assertTertiaryNavs(context['tertiary_nav_items'], course_id, age_available)
 
-    def assertTertiaryNavs(self, nav, course_id):
+    def assertTertiaryNavs(self, nav, course_id, age_available):
         reverse_kwargs = {'course_id': course_id}
         expected = [
             {
@@ -327,6 +366,8 @@ class CourseEnrollmentDemographicsMixin(CourseEnrollmentViewTestMixin):
                 'depth': 'gender'
             }
         ]
+        if not age_available:
+            expected.pop(0)
         self.assertNavs(nav, expected, self.active_tertiary_nav_label)
 
 
